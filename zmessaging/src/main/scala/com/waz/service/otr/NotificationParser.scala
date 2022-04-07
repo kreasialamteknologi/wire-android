@@ -41,12 +41,16 @@ final class NotificationParserImpl(selfId:       UserId,
   private def parse(event: GenericMessageEvent) =
     (for {
       self              <- selfUser.head
+      _                 = debug(l"Checkpoint A1")
       Some(conv)        <- convStorage.getByRemoteId(event.convId)
+      _                 = debug(l"Checkpoint A2")
       (uid, msgContent) =  event.content.unpack
+      _                 = debug(l"Checkpoint A3")
       notification      <- createNotification(uid, self, conv, event, msgContent)
+      _                 = debug(l"Checkpoint A4")
     } yield notification)
       .recover { case ex: Throwable =>
-        error(l"error while parsing (1) $event, ${ex.getMessage}", ex)
+        error(l"error while parsing (AA) $event, ${ex.getMessage}", ex)
         None
       }
 
@@ -81,9 +85,12 @@ final class NotificationParserImpl(selfId:       UserId,
   private def parse(event: RenameConversationEvent): Future[Option[NotificationData]] =
     (for {
       self       <- selfUser.head
+      _          = debug(l"Checkpoint B1")
       Some(conv) <- convStorage.getByRemoteId(event.convId)
+      _          = debug(l"Checkpoint B2")
     } yield
-      if (shouldShowNotification(self, conv, event.from, event.time))
+      if (shouldShowNotification(self, conv, event.from, event.time)) {
+        debug(l"Checkpoint B3")
         Some(NotificationData(
           msg     = event.name.str,
           conv    = conv.id,
@@ -91,27 +98,30 @@ final class NotificationParserImpl(selfId:       UserId,
           msgType = NotificationType.RENAME,
           time    = event.time
         ))
-      else None
+      } else None
     ).recover { case ex: Throwable =>
-      error(l"error while parsing (2) $event, ${ex.getMessage}", ex)
+      error(l"error while parsing (BB) $event, ${ex.getMessage}", ex)
       None
     }
 
   private def parse(event: DeleteConversationEvent): Future[Option[NotificationData]] =
     (for {
       self       <- selfUser.head
+      _          = debug(l"Checkpoint C1")
       Some(conv) <- convStorage.getByRemoteId(event.convId)
+      _          = debug(l"Checkpoint C2")
     } yield
-      if (shouldShowNotification(self, conv, event.from, event.time))
+      if (shouldShowNotification(self, conv, event.from, event.time)) {
+        debug(l"Checkpoint C3")
         Some(NotificationData(
           conv    = conv.id,
           user    = event.from,
           msgType = NotificationType.CONVERSATION_DELETED,
           time    = event.time
         ))
-      else None
+      } else None
   ).recover { case ex: Throwable =>
-    error(l"error while parsing (3) $event, ${ex.getMessage}", ex)
+    error(l"error while parsing (CC) $event, ${ex.getMessage}", ex)
     None
   }
 
