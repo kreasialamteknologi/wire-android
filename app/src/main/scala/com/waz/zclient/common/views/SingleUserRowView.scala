@@ -26,11 +26,11 @@ import android.view.{Gravity, View, ViewGroup}
 import android.widget.{CompoundButton, ImageView, LinearLayout, RelativeLayout}
 import androidx.appcompat.widget.AppCompatCheckBox
 import com.waz.model.otr.ClientId
-import com.waz.model.{Availability, IntegrationData, UserData, UserId}
+import com.waz.model.{Availability, DisplayHandleDomainPolicies, IntegrationData, UserData, UserId}
+import com.waz.service.BackendConfig
 import com.waz.threading.Threading
 import com.waz.threading.Threading._
 import com.waz.utils.returning
-import com.waz.zclient.BuildConfig
 import com.waz.zclient.calling.controllers.CallController
 import com.waz.zclient.calling.controllers.CallController.CallParticipantInfo
 import com.waz.zclient.common.controllers.ThemeController.Theme
@@ -77,8 +77,9 @@ class SingleUserRowView(context: Context, attrs: AttributeSet, style: Int)
   private lazy val youTextString                    = getString(R.string.content__system__you).capitalize
   private lazy val youText                          = returning(findById[TypefaceTextView](R.id.you_text))(_.setText(s"($youTextString)"))
 
+  private lazy val isFederationSupported = inject[BackendConfig].federationSupport.isSupported
+
   val onSelectionChanged: SourceStream[Boolean] = EventStream()
-  private var solidBackground = false
 
   checkbox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener {
     override def onCheckedChanged(buttonView: CompoundButton, isChecked: Boolean): Unit =
@@ -90,7 +91,7 @@ class SingleUserRowView(context: Context, attrs: AttributeSet, style: Int)
   })
 
   private val chosenCurrentTheme = currentTheme.collect { case Some(t) => t }
-  chosenCurrentTheme.onUi { theme => setTheme(theme, solidBackground) }
+  chosenCurrentTheme.onUi { theme => setTheme(theme, background = false) }
 
   private val videoEnabled = Signal(false)
   private val screenShareEnabled = Signal(false)
@@ -195,7 +196,7 @@ class SingleUserRowView(context: Context, attrs: AttributeSet, style: Int)
   }
 
   def setUserData(userData:       UserData,
-                  createSubtitle: (UserData, Boolean) => String = defaultSubtitle): Unit = {
+                  createSubtitle: Option[(UserData, DisplayHandleDomainPolicies.Policy) => String] = Option.empty): Unit = {
     setTitle(userData.name, userData.isSelf)
     setVerified(userData.isVerified)
 
@@ -208,13 +209,16 @@ class SingleUserRowView(context: Context, attrs: AttributeSet, style: Int)
       setIsExternal(userData.isExternal(teamId, domain) && !userData.isWireBot)
     }(Threading.Ui)
 
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    val domainHandlePolicy = if (isFederationSupported) {
       val federated = usersController.isFederated(userData)
       isFederated ! federated
-      setSubtitle(createSubtitle(userData, federated))
-    } else {
-      setSubtitle(createSubtitle(userData, false))
+      DisplayHandleDomainPolicies.ShowIfNotSame
+    }  else {
+      DisplayHandleDomainPolicies.NeverShowDomain
     }
+    val subtitleGenerator = createSubtitle.getOrElse { (u, f) => defaultSubtitle(u, f) }
+    val subtitle = subtitleGenerator(userData, domainHandlePolicy)
+    setSubtitle(subtitle)
   }
 
   private def setIsGuest(guest: Boolean): Unit = guestIndicator.setVisible(guest)
@@ -260,10 +264,10 @@ class SingleUserRowView(context: Context, attrs: AttributeSet, style: Int)
     }
   }
 
-  private def defaultSubtitle(user: UserData, isFederated: Boolean)(implicit context: Context) =
+  private def defaultSubtitle(user: UserData, handleDomainPolicy: DisplayHandleDomainPolicies.Policy)(implicit context: Context) =
     user.expiresAt.map(ea => GuestUtils.timeRemainingString(ea.instant, Instant.now)) match {
       case Some(expiration) => expiration
-      case _ => usersController.displayHandle(user)
+      case _ => usersController.displayHandle(user, handleDomainPolicy)
     }
 }
 

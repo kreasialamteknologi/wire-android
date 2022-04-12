@@ -24,9 +24,9 @@ import android.widget.{FrameLayout, TextView}
 import androidx.annotation.Nullable
 import androidx.recyclerview.widget.{LinearLayoutManager, RecyclerView}
 import com.google.android.material.tabs.TabLayout
-import com.waz.model.{ConversationRole, UserField, UserId}
-import com.waz.service.ZMessaging
+import com.waz.model.{ConversationRole, DisplayHandleDomainPolicies, UserField, UserId}
 import com.wire.signals.{CancellableFuture, Signal, SourceSignal, Subscription}
+import com.waz.service.{BackendConfig, ZMessaging}
 import com.waz.threading.Threading
 import com.waz.utils._
 import com.waz.zclient.common.controllers.{BrowserController, ThemeController, UserAccountsController}
@@ -38,7 +38,7 @@ import com.waz.zclient.pages.main.conversation.controller.IConversationScreenCon
 import com.waz.zclient.participants.{ParticipantOtrDeviceAdapter, ParticipantsController}
 import com.waz.zclient.utils.{ContextUtils, GuestUtils, RichView}
 import com.waz.zclient.views.menus.{FooterMenu, FooterMenuCallback}
-import com.waz.zclient.{BuildConfig, FragmentHelper, R}
+import com.waz.zclient.{FragmentHelper, R}
 import org.threeten.bp.Instant
 
 import scala.concurrent.Future
@@ -59,6 +59,7 @@ class SingleParticipantFragment extends FragmentHelper {
   protected lazy val userAccountsController = inject[UserAccountsController]
   protected lazy val navigationController   = inject[INavigationController]
   protected lazy val usersController        = inject[UsersController]
+  protected lazy val isFederationSupported  = inject[BackendConfig].federationSupport.isSupported
 
   protected var subs = Set.empty[Subscription]
 
@@ -185,7 +186,7 @@ class SingleParticipantFragment extends FragmentHelper {
   private def initUserHandle(): Unit = returning(view[TextView](R.id.user_handle)) { vh =>
     subs += (for {
       otherUser <- participantsController.otherParticipant
-      handle    =  usersController.displayHandle(otherUser)
+      handle    =  usersController.displayHandle(otherUser, DisplayHandleDomainPolicies.ShowIfNotSame)
     } yield handle).onUi {
       case handle if handle.nonEmpty =>
         vh.foreach { view =>
@@ -241,7 +242,7 @@ class SingleParticipantFragment extends FragmentHelper {
   }
 
   private def initClassifiedConversation(): Unit =
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (isFederationSupported) {
       classifiedBanner
       classifiedBannerText
     }

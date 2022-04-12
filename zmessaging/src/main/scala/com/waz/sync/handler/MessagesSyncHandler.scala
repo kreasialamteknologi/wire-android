@@ -30,13 +30,14 @@ import com.waz.model.GenericMessage.TextMessage
 import com.waz.model._
 import com.waz.model.errors._
 import com.waz.model.sync.ReceiptType
+import com.waz.service.BackendConfig.FederationSupport
 import com.waz.service.assets.Asset.{General, Image}
 import com.waz.service.assets._
 import com.waz.service.conversation.ConversationsContentUpdater
 import com.waz.service.messages.{MessagesContentUpdater, MessagesService}
 import com.waz.service.otr.OtrClientsService
 import com.waz.service.tracking.TrackingService
-import com.waz.service.{ErrorsService, Timeouts, UserService}
+import com.waz.service.{BackendConfig, ErrorsService, Timeouts, UserService}
 import com.waz.sync.SyncHandler.RequestInfo
 import com.waz.sync.SyncResult.Failure
 import com.waz.sync.client.{ErrorOr, ErrorOrResponse}
@@ -46,35 +47,40 @@ import com.waz.sync.{SyncResult, SyncServiceHandle}
 import com.waz.utils._
 import com.waz.zms.BuildConfig
 import com.waz.znet2.http.ResponseCode
-import com.wire.signals.CancellableFuture
+import com.wire.signals.{CancellableFuture, Signal}
 
 import scala.concurrent.Future
 import scala.concurrent.Future.successful
 import scala.concurrent.duration.{Duration, FiniteDuration}
 
-class MessagesSyncHandler(selfUserId: UserId,
-                          service:    MessagesService,
-                          msgContent: MessagesContentUpdater,
-                          clients:    OtrClientsService,
-                          otrSync:    OtrSyncHandler,
-                          convs:      ConversationsContentUpdater,
-                          storage:    MessagesStorage,
-                          sync:       SyncServiceHandle,
-                          assets:     AssetService,
-                          assetStorage: AssetStorage,
-                          uploadAssetStorage: UploadAssetStorage,
-                          cache:      CacheService,
-                          members:    MembersStorage,
-                          users: =>   UserService,
-                          tracking:   TrackingService,
-                          errors:     ErrorsService,
-                          timeouts: Timeouts) extends DerivedLogTag {
+final class MessagesSyncHandler(selfUserId: UserId,
+                                backend:    Signal[BackendConfig],
+                                service:    MessagesService,
+                                msgContent: MessagesContentUpdater,
+                                clients:    OtrClientsService,
+                                otrSync:    OtrSyncHandler,
+                                convs:      ConversationsContentUpdater,
+                                storage:    MessagesStorage,
+                                sync:       SyncServiceHandle,
+                                assets:     AssetService,
+                                assetStorage: AssetStorage,
+                                uploadAssetStorage: UploadAssetStorage,
+                                cache:      CacheService,
+                                members:    MembersStorage,
+                                users: =>   UserService,
+                                tracking:   TrackingService,
+                                errors:     ErrorsService,
+                                timeouts: Timeouts) extends DerivedLogTag {
   import com.waz.threading.Threading.Implicits.Background
 
+  private def federationSupported: Boolean = backend.currentValue.exists { b => b.federationSupport.isSupported }
+
   private def postOtrMessage(convId: ConvId, gm: GenericMessage, isHidden: Boolean) =
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (federationSupported) {
+      verbose(l"API federation is supported and we send a qualified otr message")
       otrSync.postQualifiedOtrMessage(convId, gm, isHidden)
     } else {
+      verbose(l"API federation is NOT supported and we send a regular otr message")
       otrSync.postOtrMessage(convId, gm, isHidden)
     }
 
@@ -85,7 +91,7 @@ class MessagesSyncHandler(selfUserId: UserId,
                              nativePush: Boolean,
                              enforceIgnoreMissing: Boolean
                             ) =
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (federationSupported) {
       users.qualifiedIds(specificUsers).flatMap { qIds =>
         otrSync.postQualifiedOtrMessage(convId, gm, isHidden, QTargetRecipients.SpecificUsers(qIds), nativePush, enforceIgnoreMissing)
       }

@@ -24,6 +24,7 @@ import com.waz.log.LogSE._
 import com.waz.model.UserData.{ConnectionStatus, UserDataDao}
 import com.waz.model.UserPermissions.{ExternalPermissions, decodeBitmask}
 import com.waz.model._
+import com.waz.service.BackendConfig.FederationSupport
 import com.waz.service.conversation.{ConversationsService, ConversationsUiService}
 import com.waz.service.teams.TeamsService
 import com.waz.sync.SyncServiceHandle
@@ -36,8 +37,6 @@ import com.wire.signals._
 import scala.collection.immutable.Set
 import scala.concurrent.Future
 import scala.concurrent.duration._
-
-import com.waz.zms.BuildConfig
 
 final case class SearchResults(top:   IndexedSeq[UserData]         = IndexedSeq.empty,
                                local: IndexedSeq[UserData]         = IndexedSeq.empty,
@@ -59,6 +58,7 @@ trait UserSearchService {
 final class UserSearchServiceImpl(selfUserId:           UserId,
                                   teamId:               Option[TeamId],
                                   domain:               Domain,
+                                  backend:              Signal[BackendConfig],
                                   userService:          UserService,
                                   usersStorage:         UsersStorage,
                                   teamsService:         TeamsService,
@@ -74,6 +74,8 @@ final class UserSearchServiceImpl(selfUserId:           UserId,
   import Threading.Implicits.Background
   import com.waz.service.UserSearchService._
   import timeouts.search._
+
+  private def federationSupported: Boolean = backend.currentValue.exists { b => b.federationSupport.isSupported }
 
   private val userSearchResult = Signal(IndexedSeq.empty[UserData])
 
@@ -203,7 +205,7 @@ final class UserSearchServiceImpl(selfUserId:           UserId,
   override def search(queryStr: String): Signal[SearchResults] = {
     val query = SearchQuery(queryStr)
 
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (federationSupported) {
       if (query.hasDomain || query.isEmpty) {
         search(query)
       } else {
@@ -279,7 +281,7 @@ final class UserSearchServiceImpl(selfUserId:           UserId,
       userSearchResult ! allUsers
 
       if (remote.nonEmpty) {
-        if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+        if (federationSupported) {
           sync.syncQualifiedSearchResults(remote.map(_.qualifiedId).toSet).map(_ => ())
         } else {
           sync.syncSearchResults(remote.map(_.qualifiedId.id).toSet).map(_ => ())

@@ -20,9 +20,9 @@ package com.waz.model
 import com.waz.api.Verification
 import com.waz.db.Col._
 import com.waz.db.Dao
-import com.waz.log.BasicLogging.LogTag.DerivedLogTag
 import com.waz.{api, model}
 import com.waz.model.AssetMetaData.Image.Tag.Medium
+import com.waz.model.DisplayHandleDomainPolicies.{AlwaysShowDomain, Policy, ShowIfNotSame}
 import com.waz.model.ManagedBy.ManagedBy
 import com.waz.model.UserData.ConnectionStatus
 import com.waz.model.UserPermissions._
@@ -34,7 +34,12 @@ import com.waz.utils.wrappers.{DB, DBCursor}
 
 import scala.concurrent.duration._
 import scala.util.Try
-import com.waz.zms.BuildConfig
+
+object DisplayHandleDomainPolicies extends Enumeration {
+  type Policy = Value
+
+  val NeverShowDomain, AlwaysShowDomain, ShowIfNotSame = Value
+}
 
 final case class UserData(override val id:       UserId,
                           domain:                Domain                 = Domain.Empty,
@@ -70,15 +75,14 @@ final case class UserData(override val id:       UserId,
   lazy val isSelf: Boolean              = connection == ConnectionStatus.Self
   lazy val isAcceptedOrPending: Boolean = connection == ConnectionStatus.Accepted || connection == ConnectionStatus.PendingFromOther || connection == ConnectionStatus.PendingFromUser
   lazy val isVerified: Boolean          = verified == Verification.VERIFIED
-  lazy val isAutoConnect: Boolean       = isConnected && ! isSelf && connectionMessage.isEmpty
   lazy val isReadOnlyProfile: Boolean   = managedBy.exists(_ != ManagedBy.Wire) //if none or "Wire", then it's not read only.
   lazy val isWireBot: Boolean           = integrationId.nonEmpty
 
   lazy val qualifiedId: Option[QualifiedId] = domain.mapOpt(d => QualifiedId(id, d))
-  def displayHandle(currentDomain: Domain = Domain.Empty, forceDomain: Boolean = false): String =
+  def displayHandle(currentDomain: Domain, domainPolicy: Policy): String =
     handle match {
-      case Some(h) if BuildConfig.FEDERATION_USER_DISCOVERY && h.nonEmpty &&
-                                 domain.isDefined && (forceDomain || domain != currentDomain) =>
+      case Some(h) if h.nonEmpty && domain.isDefined
+          && domainPolicy == AlwaysShowDomain || (domainPolicy == ShowIfNotSame && domain != currentDomain) =>
         s"${h.withSymbol}@${domain.str}"
       case Some(h) if h.nonEmpty =>
         h.withSymbol
@@ -139,7 +143,7 @@ final case class UserData(override val id:       UserId,
 
   def isGuest(ourTeamId: Option[TeamId], ourDomain: Domain = Domain.Empty): Boolean = {
     val isNotSameTeam = ourTeamId.isDefined && teamId != ourTeamId
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (domain.isDefined) {
       val isSameDomain = ourDomain == domain
       isNotSameTeam || !isSameDomain
     } else {
@@ -149,23 +153,20 @@ final case class UserData(override val id:       UserId,
 
   def isExternal(ourTeamId: Option[TeamId], ourDomain: Domain): Boolean = {
     val isSameTeam = teamId.isDefined && teamId == ourTeamId
-    val hasPermission = decodeBitmask(permissions._1) == ExternalPermissions
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
-      isSameTeam && hasPermission && ourDomain == domain
-    } else {
-      isSameTeam && hasPermission
-    }
+    val hasExternalPermission = decodeBitmask(permissions._1) == ExternalPermissions
+    isSameTeam && hasExternalPermission
   }
 
   def isInTeam(otherTeamId: Option[TeamId], ourDomain: Domain): Boolean = {
     val isSameTeam = teamId.isDefined && teamId == otherTeamId
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (ourDomain.isDefined) {
       val isSameDomain = ourDomain.isDefined && ourDomain == domain
       isSameTeam && isSameDomain
     } else {
       isSameTeam
     }
   }
+
   def matchesQuery(query: SearchQuery): Boolean =
     handle.exists(_.startsWithQuery(query.query)) ||
       (!query.handleOnly &&

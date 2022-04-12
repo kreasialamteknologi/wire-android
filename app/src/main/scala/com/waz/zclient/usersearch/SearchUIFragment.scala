@@ -33,7 +33,7 @@ import com.waz.content.UsersStorage
 import com.waz.model.UserData.ConnectionStatus
 import com.waz.model._
 import com.waz.service.tracking.GroupConversationEvent
-import com.waz.service.{SearchQuery, ZMessaging}
+import com.waz.service.{BackendConfig, SearchQuery, ZMessaging}
 import com.wire.signals.CancellableFuture
 import com.waz.threading.Threading
 import com.wire.signals.{Signal, Subscription}
@@ -67,7 +67,6 @@ import scala.concurrent.Future
 import scala.concurrent.duration._
 import com.waz.zclient.usersearch.SearchUIFragment._
 import com.waz.threading.Threading._
-import com.waz.zclient.BuildConfig
 import com.waz.zclient.participants.ParticipantsController
 
 final class SearchUIFragment extends BaseFragment[Container]
@@ -96,6 +95,7 @@ final class SearchUIFragment extends BaseFragment[Container]
   private lazy val adapter                = new SearchUIAdapter(this)
   private lazy val searchController       = inject[SearchController]
   private lazy val retrieveSearchResults  = new RetrieveSearchResults()
+  private lazy val isFederationSupported  = inject[BackendConfig].federationSupport.isSupported
 
   private lazy val startUiToolbar         = view[Toolbar](R.id.pickuser_toolbar)
 
@@ -194,7 +194,7 @@ final class SearchUIFragment extends BaseFragment[Container]
   }
 
   private lazy val errorMessageView = returning(view[TypefaceTextView](R.id.pickuser__error_text)) { vh =>
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (isFederationSupported) {
       subs += searchController.searchUserOrServices.map {
         case SearchUserListState.Services(_) |
              SearchUserListState.Users(_) |
@@ -295,7 +295,7 @@ final class SearchUIFragment extends BaseFragment[Container]
     toolbarTitle
     emptyServicesButton
 
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (isFederationSupported) {
       emptySearchIcon
       emptySearchSameDomainText
       emptySearchOtherDomainsText
@@ -482,7 +482,7 @@ final class SearchUIFragment extends BaseFragment[Container]
     self.head.map { self =>
       val sharingIntent = IntentUtils.getInviteIntent(
         getString(R.string.people_picker__invite__share_text__header, self.name.str),
-        getString(R.string.people_picker__invite__share_text__body,self.displayHandle())
+        getString(R.string.people_picker__invite__share_text__body,self.displayHandle(self.domain, DisplayHandleDomainPolicies.ShowIfNotSame))
       )
       startActivity(Intent.createChooser(sharingIntent, getString(R.string.people_picker__invite__share_details_dialog)))
     }

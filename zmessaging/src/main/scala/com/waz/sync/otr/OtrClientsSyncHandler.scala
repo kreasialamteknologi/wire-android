@@ -24,13 +24,15 @@ import com.waz.content.UserPreferences.ShouldPostClientCapabilities
 import com.waz.log.BasicLogging.LogTag.DerivedLogTag
 import com.waz.model.otr.{Client, ClientId, OtrClientIdMap, QOtrClientIdMap}
 import com.waz.model.{Domain, QualifiedId, UserId}
+import com.waz.service.BackendConfig
+import com.waz.service.BackendConfig.FederationSupport
 import com.waz.service.otr.OtrService.SessionId
 import com.waz.service.otr._
 import com.waz.sync.SyncResult
 import com.waz.sync.SyncResult.Success
 import com.waz.sync.client.{ErrorOr, OtrClient}
-import com.waz.zms.BuildConfig
 import com.wire.cryptobox.PreKey
+import com.wire.signals.Signal
 
 import scala.collection.immutable.Map
 import scala.concurrent.Future
@@ -44,16 +46,19 @@ trait OtrClientsSyncHandler {
   def syncSessions(clients: QOtrClientIdMap): Future[Option[ErrorResponse]]
 }
 
-class OtrClientsSyncHandlerImpl(selfId:        UserId,
-                                currentDomain: Domain,
-                                selfClient:    ClientId,
-                                netClient:     OtrClient,
-                                otrClients:    OtrClientsService,
-                                cryptoBox:     CryptoBoxService,
-                                userPrefs:     UserPreferences)
+final class OtrClientsSyncHandlerImpl(selfId:        UserId,
+                                      currentDomain: Domain,
+                                      backend:       Signal[BackendConfig],
+                                      selfClient:    ClientId,
+                                      netClient:     OtrClient,
+                                      otrClients:    OtrClientsService,
+                                      cryptoBox:     CryptoBoxService,
+                                      userPrefs:     UserPreferences)
   extends OtrClientsSyncHandler with DerivedLogTag { self =>
   import OtrClientsSyncHandlerImpl.LoadPreKeysMaxClients
   import com.waz.threading.Threading.Implicits.Background
+
+  private def federationSupported: Boolean = backend.currentValue.exists { b => b.federationSupport.isSupported }
 
   private lazy val sessions = cryptoBox.sessions
 
@@ -176,7 +181,7 @@ class OtrClientsSyncHandlerImpl(selfId:        UserId,
   }
 
   override def syncSessions(clients: QOtrClientIdMap): Future[Option[ErrorResponse]] =
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (federationSupported) {
       loadPreKeys(clients).flatMap {
         case Left(error) => Future.successful(Some(error))
         case Right(qs)   =>

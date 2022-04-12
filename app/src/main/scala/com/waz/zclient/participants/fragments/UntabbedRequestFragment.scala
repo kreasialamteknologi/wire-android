@@ -3,8 +3,8 @@ package com.waz.zclient.participants.fragments
 import android.os.Bundle
 import androidx.fragment.app.FragmentManager
 import androidx.recyclerview.widget.{LinearLayoutManager, RecyclerView}
-import com.waz.model.{ConversationRole, UserData, UserId}
-import com.waz.service.ZMessaging
+import com.waz.model.{ConversationRole, DisplayHandleDomainPolicies, UserData, UserId}
+import com.waz.service.{BackendConfig, ZMessaging}
 import com.wire.signals.CancellableFuture
 import com.waz.threading.Threading
 import com.wire.signals.Signal
@@ -17,6 +17,7 @@ import com.waz.zclient.participants.UserRequester
 
 import scala.concurrent.duration._
 import com.waz.threading.Threading._
+import com.waz.zclient.participants.ParticipantsController.ClassifiedConversation
 
 import scala.concurrent.Future
 
@@ -50,18 +51,22 @@ abstract class UntabbedRequestFragment extends SingleParticipantFragment {
   override protected def initDetailsView(): Unit = returning(view[RecyclerView](R.id.not_tabbed_recycler_view)) { vh =>
     vh.foreach(_.setLayoutManager(new LinearLayoutManager(ctx)))
 
+    val isFederationSupported  = inject[BackendConfig].federationSupport.isSupported
     (for {
         zms           <- inject[Signal[ZMessaging]].head
         Some(user)    <- userToConnect
         isGroup       <- participantsController.isGroup.head
         isFederated   =  usersController.isFederated(user)
-        handle        =  usersController.displayHandle(user)
+        handle        =  usersController.displayHandle(user, DisplayHandleDomainPolicies.ShowIfNotSame)
         isGuest       =  !user.isWireBot && user.isGuest(zms.teamId, zms.selfDomain)
         isExternal    =  !user.isWireBot && user.isExternal(zms.teamId, zms.selfDomain)
         isDarkTheme   <- inject[ThemeController].darkThemeSet.head
         isWireless    =  user.expiresAt.isDefined
         linkedText    <- linkedText(user)
-        classified    <- participantsController.isConvWithUserClassified(user.id).head
+        classified    <- if (isFederationSupported)
+                           participantsController.isConvWithUserClassified(user.id).head
+                         else
+                           Future.successful(ClassifiedConversation.None)
       } yield (user, handle, isGuest, isExternal, isDarkTheme, isGroup, isWireless, isFederated, linkedText, classified)).foreach {
         case (user, handle, isGuest, isExternal, isDarkTheme, isGroup, isWireless, isFederated, linkedText, classified) =>
           val participantRole = participantsController.participants.map(_.get(user.id))

@@ -25,6 +25,7 @@ import com.waz.log.LogSE._
 import com.waz.model.ConversationData.ConversationType
 import com.waz.model.UserData.ConnectionStatus
 import com.waz.model._
+import com.waz.service.BackendConfig.FederationSupport
 import com.waz.service.ConnectionService._
 import com.waz.service.EventScheduler.Stage
 import com.waz.service.conversation.ConversationsContentUpdater
@@ -32,9 +33,8 @@ import com.waz.service.messages.MessagesService
 import com.waz.service.push.PushService
 import com.waz.sync.SyncServiceHandle
 import com.waz.threading.Threading
-import com.wire.signals.Serialized
+import com.wire.signals.{Serialized, Signal}
 import com.waz.utils.RichWireInstant
-import com.waz.zms.BuildConfig
 
 import scala.collection.breakOut
 import scala.concurrent.Future
@@ -51,34 +51,37 @@ trait ConnectionService {
   def cancelConnection(userId: UserId): Future[Option[UserData]]
 }
 
-class ConnectionServiceImpl(selfUserId:      UserId,
-                            teamId:          Option[TeamId],
-                            push:            PushService,
-                            convsContent:    ConversationsContentUpdater,
-                            convsStorage:    ConversationStorage,
-                            members:         MembersStorage,
-                            messages:        MessagesService,
-                            messagesStorage: MessagesStorage,
-                            users:           UserService,
-                            usersStorage:    UsersStorage,
-                            sync:            SyncServiceHandle) extends ConnectionService with DerivedLogTag {
+final class ConnectionServiceImpl(selfUserId:      UserId,
+                                  teamId:          Option[TeamId],
+                                  backend:         Signal[BackendConfig],
+                                  push:            PushService,
+                                  convsContent:    ConversationsContentUpdater,
+                                  convsStorage:    ConversationStorage,
+                                  members:         MembersStorage,
+                                  messages:        MessagesService,
+                                  messagesStorage: MessagesStorage,
+                                  users:           UserService,
+                                  usersStorage:    UsersStorage,
+                                  sync:            SyncServiceHandle) extends ConnectionService with DerivedLogTag {
 
   import Threading.Implicits.Background
 
   override val connectionEventsStage = EventScheduler.Stage[UserConnectionEvent]((_, e) => handleUserConnectionEvents(e))
+
+  private def federationSupported: Boolean = backend.currentValue.exists { b => b.federationSupport.isSupported }
 
   override def handleUserConnectionEvents(events: Seq[UserConnectionEvent]): Future[Unit] = {
     def updateOrCreate(event: UserConnectionEvent)(user: Option[UserData]): UserData =
       user.fold {
         UserData(
           event.to,
-          if (BuildConfig.FEDERATION_USER_DISCOVERY) event.toDomain else Domain.Empty,
+          if (federationSupported) event.toDomain else Domain.Empty,
           None,
           event.fromUserName.getOrElse(Name.Empty),
           None,
           None,
           connection = event.status,
-          conversation = if (BuildConfig.FEDERATION_USER_DISCOVERY) event.qualifiedConvId else Some(RConvQualifiedId(event.convId)),
+          conversation = if (federationSupported) event.qualifiedConvId else Some(RConvQualifiedId(event.convId)),
           connectionMessage = event.message,
           searchKey = SearchKey.Empty,
           connectionLastUpdated = event.lastUpdated,
@@ -86,7 +89,7 @@ class ConnectionServiceImpl(selfUserId:      UserId,
         )
       } {
         _.copy(
-          conversation = if (BuildConfig.FEDERATION_USER_DISCOVERY) event.qualifiedConvId else Some(RConvQualifiedId(event.convId))
+          conversation = if (federationSupported) event.qualifiedConvId else Some(RConvQualifiedId(event.convId))
         ).updateConnectionStatus(event.status, Some(event.lastUpdated), event.message)
       }
 
@@ -120,7 +123,7 @@ class ConnectionServiceImpl(selfUserId:      UserId,
     }
 
     val oneToOneConvData = eventInfos.map { case ConnectionEventInfo(user , _ , _) =>
-      (BuildConfig.FEDERATION_USER_DISCOVERY, user.qualifiedId) match {
+      (federationSupported, user.qualifiedId) match {
         case (true, Some(qId)) => OneToOneConvData(qId, user.conversation, getConvTypeForUser(user))
         case _                 => OneToOneConvData(QualifiedId(user.id), user.conversation, getConvTypeForUser(user))
       }
@@ -170,7 +173,7 @@ class ConnectionServiceImpl(selfUserId:      UserId,
    * Connects to user and creates one-to-one conversation if needed. Returns existing conversation if user is already connected.
    */
   override def connectToUser(userId: UserId, message: String, name: Name): Future[Option[ConversationData]] =
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (federationSupported) {
       users.qualifiedId(userId).flatMap(connectToUser(_, message, name))
     } else {
       def sanitizedName = if (name.isEmpty) Name("_") else if (name.length >= 256) name.substring(0, 256) else name
@@ -231,7 +234,7 @@ class ConnectionServiceImpl(selfUserId:      UserId,
     } yield conv
 
   override def acceptConnection(userId: UserId): Future[ConversationData] =
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (federationSupported) {
       users.qualifiedId(userId).flatMap(acceptConnection)
     } else {
       val updateConnectionStatus = users.updateConnectionStatus(userId, ConnectionStatus.Accepted).map {
@@ -272,7 +275,7 @@ class ConnectionServiceImpl(selfUserId:      UserId,
     } yield updated.fold(conv)(_._2)
 
   override def ignoreConnection(userId: UserId): Future[Option[UserData]] =
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (federationSupported) {
       users.qualifiedId(userId).flatMap(ignoreConnection)
     } else {
       for {
@@ -290,7 +293,7 @@ class ConnectionServiceImpl(selfUserId:      UserId,
   } yield user
 
   override def blockConnection(userId: UserId): Future[Option[UserData]] =
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (federationSupported) {
       users.qualifiedId(userId).flatMap(blockConnection)
     } else {
       for {
@@ -313,7 +316,7 @@ class ConnectionServiceImpl(selfUserId:      UserId,
       qId  <- users.qualifiedId(userId)
       _    <- user.fold(Future.successful({})) { _ =>
                 for {
-                  syncId <- if (BuildConfig.FEDERATION_USER_DISCOVERY && qId.hasDomain)
+                  syncId <- if (federationSupported && qId.hasDomain)
                               sync.postQualifiedConnectionStatus(qId, ConnectionStatus.Accepted)
                             else
                               sync.postConnectionStatus(userId, ConnectionStatus.Accepted)
@@ -334,7 +337,7 @@ class ConnectionServiceImpl(selfUserId:      UserId,
       }
     }).flatMap {
       case Some((prev, user)) if prev != user =>
-        (BuildConfig.FEDERATION_USER_DISCOVERY, user.qualifiedId) match {
+        (federationSupported, user.qualifiedId) match {
           case (true, Some(qId)) =>
             sync.postQualifiedConnectionStatus(qId, ConnectionStatus.Cancelled)
           case _ =>
@@ -365,7 +368,7 @@ class ConnectionServiceImpl(selfUserId:      UserId,
       def userIdForConv(convId: ConvId) = UserId(convId.str)
 
       def getRemotes: Future[Map[RConvQualifiedId, ConversationData]] =
-        if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+        if (federationSupported) {
           convsInfo.flatMap(_.remoteId).toSet match {
             case remotes if remotes.isEmpty =>
               Future.successful(Map.empty)
@@ -412,7 +415,7 @@ class ConnectionServiceImpl(selfUserId:      UserId,
                              rId,
                              conv.copy(
                                remoteId = rId.id,
-                               domain = if (BuildConfig.FEDERATION_USER_DISCOVERY && rId.domain.nonEmpty) Domain(rId.domain) else Domain.Empty
+                               domain = if (federationSupported && rId.domain.nonEmpty) Domain(rId.domain) else Domain.Empty
                              )
                            )
                          }

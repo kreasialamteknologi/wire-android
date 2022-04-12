@@ -27,7 +27,7 @@ import android.widget.{ImageView, LinearLayout}
 import com.bumptech.glide.request.RequestOptions
 import com.waz.content.UserPreferences
 import com.waz.model.otr.Client
-import com.waz.model.{AccentColor, Availability, Picture, TeamData, UserPermissions}
+import com.waz.model.{AccentColor, Availability, DisplayHandleDomainPolicies, Picture, TeamData, UserPermissions}
 import com.waz.service.teams.TeamsService
 import com.waz.service.{AccountsService, ZMessaging}
 import com.waz.threading.Threading
@@ -238,6 +238,7 @@ class ProfileViewController(view: ProfileView)(implicit inj: Injector, ec: Event
   lazy val zms             = inject[Signal[ZMessaging]]
   lazy val usersController = inject[UsersController]
   lazy val usersAccounts   = inject[UserAccountsController]
+  private lazy val backendConfig = zms.flatMap(_.backend)
   private lazy val userPrefs = zms.map(_.userPrefs)
 
   val currentUser = accounts.activeAccountId.collect { case Some(id) => id }
@@ -262,8 +263,9 @@ class ProfileViewController(view: ProfileView)(implicit inj: Injector, ec: Event
   } yield clients
 
   self.on(Threading.Ui) { self =>
+    val federationEnabled = backendConfig.currentValue.exists(_.federationSupport.isSupported)
     view.setAccentColor(AccentColor(self.accent).color)
-    view.setHandle(self.displayHandle(forceDomain = true))
+    view.setHandle(self.displayHandle(self.domain, if(federationEnabled) DisplayHandleDomainPolicies.AlwaysShowDomain else DisplayHandleDomainPolicies.NeverShowDomain))
     view.setUserName(self.name)
   }
 

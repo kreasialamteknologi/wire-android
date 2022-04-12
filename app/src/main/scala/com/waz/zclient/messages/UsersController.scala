@@ -31,7 +31,6 @@ import com.waz.zclient.messages.UsersController.DisplayName.{Me, Other}
 import com.waz.zclient.utils.ContextUtils._
 import com.waz.zclient.{Injectable, Injector, R}
 import com.waz.zclient.log.LogUI._
-import com.waz.zclient.BuildConfig
 
 import scala.concurrent.Future
 
@@ -70,15 +69,15 @@ class UsersController(implicit injector: Injector, context: Context)
       userService.flatMap(_.userNames.map(_.getOrElse(id, DefaultDeletedName)).map(Other(_)))
   }
 
-  def displayHandle(id: UserId): Future[String] = {
+  def displayHandle(id: UserId, domainPolicy: DisplayHandleDomainPolicies.Policy): Future[String] = {
     import Threading.Implicits.Background
     for {
+      z <- zms.head
       service    <- userService.head
       Some(user) <- service.findUser(id)
-    } yield displayHandle(user)
+    } yield displayHandle(user, domainPolicy)
   }
-
-  def displayHandle(user: UserData): String = user.displayHandle(selfDomain)
+  def displayHandle(user: UserData, domainPolicy: DisplayHandleDomainPolicies.Policy): String = user.displayHandle(selfDomain, domainPolicy)
 
   def syncUserAndCheckIfDeleted(userId: UserId): Future[(Option[UserData], Option[UserData])] = {
     import Threading.Implicits.Background
@@ -156,7 +155,7 @@ class UsersController(implicit injector: Injector, context: Context)
   def selfUser: Signal[UserData] = selfUserId.flatMap(user)
 
   def isFederated(user: UserData): Boolean =
-    BuildConfig.FEDERATION_USER_DISCOVERY && user.domain != selfDomain
+    user.domain.isDefined && selfDomain.isDefined && user.domain != selfDomain
 
   def conv(msg: MessageData): Signal[ConversationData] =
     for {

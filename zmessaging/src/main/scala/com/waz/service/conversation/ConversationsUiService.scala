@@ -31,6 +31,7 @@ import com.waz.model.UserData.ConnectionStatus
 import com.waz.model._
 import com.waz.model.sync.ReceiptType
 import com.waz.service.AccountsService.InForeground
+import com.waz.service.BackendConfig.FederationSupport
 import com.waz.service.ZMessaging.currentBeDrift
 import com.waz.service._
 import com.waz.service.assets.{AES_CBC_Encryption, AssetService, ContentForUpload, UploadAsset, UriHelper}
@@ -39,11 +40,9 @@ import com.waz.service.messages.{MessagesContentUpdater, MessagesService}
 import com.waz.service.tracking.{ContributionEvent, TrackingService}
 import com.waz.sync.{SyncRequestService, SyncServiceHandle}
 import com.waz.sync.client.{ConversationsClient, ErrorOr}
-import com.wire.signals.CancellableFuture
+import com.wire.signals.{CancellableFuture, EventStream, Signal}
 import com.waz.threading.Threading
 import com.waz.utils._
-import com.waz.zms.BuildConfig
-import com.wire.signals.EventStream
 
 import scala.concurrent.Future
 import scala.concurrent.duration._
@@ -123,6 +122,7 @@ object ConversationsUiService {
 class ConversationsUiServiceImpl(selfUserId:        UserId,
                                  teamId:            Option[TeamId],
                                  domain:            Domain,
+                                 backend:           Signal[BackendConfig],
                                  assets:            AssetService,
                                  userService:       UserService,
                                  messages:          MessagesService,
@@ -143,6 +143,8 @@ class ConversationsUiServiceImpl(selfUserId:        UserId,
                                  propertiesService: PropertiesService) extends ConversationsUiService with DerivedLogTag {
   import ConversationsUiService._
   import Threading.Implicits.Background
+
+  private def federationSupported: Boolean = backend.currentValue.exists { b => b.federationSupport.isSupported }
 
   override val assetUploadCancelled = EventStream[Mime]() //size, mime
   override val assetUploadFailed    = EventStream[ErrorResponse]()
@@ -302,7 +304,7 @@ class ConversationsUiServiceImpl(selfUserId:        UserId,
     = messages.addRestrictedFileMessage(convId, from, extension)
 
   private def partitionForQualified(userIds: Set[UserId]) =
-    if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+    if (federationSupported) {
       for {
         users        <- userService.findUsers(userIds.toSeq)
         qualified    =  users.collect { case Some(u) if u.qualifiedId.nonEmpty => u.id -> u.qualifiedId }.toMap
@@ -347,7 +349,7 @@ class ConversationsUiServiceImpl(selfUserId:        UserId,
                   else Future.successful(false)
       _        <- if (toDelete) userService.deleteUsers(Set(user), sendLeaveMessage = false) else Future.successful(())
       _        <- messages.addMemberLeaveMessage(conv, selfUserId, Set(user), reason = None)
-      qId      <- if (BuildConfig.FEDERATION_USER_DISCOVERY) userService.qualifiedId(user).map(Some(_)) else Future.successful(None)
+      qId      <- if (federationSupported) userService.qualifiedId(user).map(Some(_)) else Future.successful(None)
       syncId   <- qId.fold(sync.postConversationMemberLeave(conv, user))(sync.postConversationMemberLeave(conv, _))
     } yield Option(syncId))
       .recover {
@@ -422,7 +424,7 @@ class ConversationsUiServiceImpl(selfUserId:        UserId,
           case _ =>
             for {
               _    <-
-                if (BuildConfig.FEDERATION_USER_DISCOVERY) {
+                if (federationSupported) {
                   userService.qualifiedId(otherUserId).flatMap { qId =>
                     sync.postConversation(ConvId(otherUserId.str), qId, None, Set(Access.PRIVATE), AccessRole.PRIVATE, None, ConversationRole.AdminRole)
                   }
